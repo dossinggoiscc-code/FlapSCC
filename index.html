@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Super Mario Flappy Challenge</title>
+    <style>
+        body {
+            margin: 0;
+            background: #222;
+            font-family: 'Courier New', Courier, monospace;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: white;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 400px;
+            height: 600px;
+            box-shadow: 0px 0px 20px rgba(0,0,0,0.8);
+        }
+        canvas {
+            background: #5c94fc; /* Mario Sky Blue */
+            display: block;
+        }
+        .overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            box-sizing: border-box;
+            padding: 20px;
+            text-align: center;
+        }
+        input {
+            width: 80%;
+            padding: 10px;
+            margin: 8px 0;
+            border: 2px solid #e52521; /* Mario Red */
+            background: #fff;
+            color: #000;
+            font-weight: bold;
+            border-radius: 5px;
+        }
+        button {
+            background: #fbd000; /* Mario Yellow */
+            color: #000;
+            border: none;
+            padding: 12px 25px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            margin-top: 15px;
+            border-radius: 5px;
+            box-shadow: 0 4px #b59600;
+        }
+        button:active {
+            box-shadow: 0 1px #b59600;
+            transform: translateY(3px);
+        }
+        .hidden { display: none !important; }
+        #leaderboard-list {
+            list-style: none; padding: 0; width: 80%;
+            max-height: 150px; overflow-y: auto; margin-bottom: 15px;
+        }
+        #leaderboard-list li {
+            display: flex; justify-content: space-between;
+            padding: 5px 0; border-bottom: 1px dashed #aaa;
+            font-size: 14px;
+        }
+        #admin-btn {
+            position: fixed; bottom: 10px; right: 10px;
+            background: #444; color: #fff; font-size: 10px; padding: 5px; box-shadow: none;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+
+    <div id="menu-screen" class="overlay">
+        <h2 style="color: #fbd000; margin-bottom: 5px;">MARIO FLAP</h2>
+        <p style="font-size: 12px; margin-top: 0;">TOP LEADERBOARD</p>
+        <ul id="leaderboard-list"></ul>
+
+        <h3 style="margin-top: 15px; color: #e52521;">ENTER TO PLAY</h3>
+        <input type="text" id="p-name" placeholder="Full Name" required>
+        <input type="tel" id="p-phone" placeholder="Phone Number" required>
+        <input type="text" id="p-work" placeholder="Workplace / Company" required>
+        <button onclick="submitRegistration()">START FLAPPING</button>
+    </div>
+
+    <div id="countdown-screen" class="overlay hidden">
+        <h1 id="countdown-text" style="font-size: 80px; color: #fbd000;">5</h1>
+        <p id="player-glance" style="color: #aaa;"></p>
+    </div>
+
+    <div id="gameover-screen" class="overlay hidden">
+        <h1 style="color: #e52521; margin-bottom: 5px;">GAME OVER</h1>
+        <p id="final-score" style="font-size: 20px; font-weight: bold;"></p>
+        <p style="font-size: 12px; color: #aaa;">To try again, please re-verify details.</p>
+        <button onclick="backToMenu()">NEXT PLAYER</button>
+    </div>
+</div>
+
+<button id="admin-btn" onclick="exportData()">Export Data (CSV)</button>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // Game Variables
+    let bird, pipes, score, gameLoopInterval, gameState = "MENU"; 
+    let visitorLogs = JSON.parse(localStorage.getItem('visitorLogs')) || [];
+    let highScores = JSON.parse(localStorage.getItem('highScores')) || [];
+    
+    let currentSession = { name: "", phone: "", work: "" };
+
+    // --- Core Classes ---
+    class MarioBird {
+        constructor() {
+            this.x = 80; this.y = 250;
+            this.radius = 14; this.velocity = 0;
+            this.gravity = 0.4; this.jump = -6.5;
+        }
+        draw() {
+            // Drawn to look roughly like a Mario overalls shape / Red Cap color palette
+            ctx.fillStyle = "#e52521"; // Mario Red
+            ctx.beginPath(); ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2); ctx.fill();
+            ctx.fillStyle = "#fbd000"; // Yellow details
+            ctx.beginPath(); ctx.arc(this.x + 6, this.y - 4, 4, 0, Math.PI * 2); ctx.fill(); 
+            ctx.fillStyle = "#00249c"; // Blue overalls accent
+            ctx.fillRect(this.x - 10, this.y + 4, 16, 6);
+        }
+        update() {
+            this.velocity += this.gravity;
+            this.y += this.velocity;
+            if (this.y + this.radius > canvas.height - 40) { // Ground crash
+                this.y = canvas.height - 40 - this.radius;
+                endGame();
+            }
+            if (this.y - this.radius < 0) this.y = this.radius; // Ceiling limit
+        }
+        flap() { this.velocity = this.jump; }
+    }
+
+    class Pipe {
+        constructor() {
+            this.gap = 140;
+            this.width = 60;
+            this.x = canvas.width;
+            this.topHeight = Math.floor(Math.random() * (canvas.height - this.gap - 120)) + 40;
+            this.passed = false;
+        }
+        draw() {
+            ctx.fillStyle = "#43b047"; // Mario Pipe Green
+            ctx.strokeStyle = "#004000"; ctx.lineWidth = 3;
+            // Top Pipe
+            ctx.fillRect(this.x, 0, this.width, this.topHeight);
+            ctx.strokeRect(this.x, 0, this.width, this.topHeight);
+            // Bottom Pipe
+            let bottomY = this.topHeight + this.gap;
+            ctx.fillRect(this.x, bottomY, this.width, canvas.height - bottomY - 40);
+            ctx.strokeRect(this.x, bottomY, this.width, canvas.height - bottomY - 40);
+        }
+        update() {
+            this.x -= 2.5; // Speed
+        }
+    }
+
+    // --- System Functions ---
+    function updateLeaderboardUI() {
+        const list = document.getElementById('leaderboard-list');
+        list.innerHTML = "";
+        // Sort and show top 5
+        highScores.sort((a,b) => b.score - a.score);
+        highScores.slice(0, 5).forEach((item, index) => {
+            list.innerHTML += `<li><span>${index+1}. ${item.name} (${item.work})</span> <strong>${item.score} pts</strong></li>`;
+        });
+        if(highScores.length === 0) list.innerHTML = "<li style='justify-content:center; color:#aaa;'>No scores yet!</li>";
+    }
+
+    function submitRegistration() {
+        const name = document.getElementById('p-name').value.trim();
+        const phone = document.getElementById('p-phone').value.trim();
+        const work = document.getElementById('p-work').value.trim();
+
+        if (!name || !phone || !work) {
+            alert("Please fill out all fields to play!"); return;
+        }
+
+        currentSession = { name, phone, work };
+        
+        // Hide form, trigger countdown
+        document.getElementById('menu-screen').classList.add('hidden');
+        document.getElementById('countdown-screen').classList.remove('hidden');
+        document.getElementById('player-glance').innerText = `Player: ${name}`;
+
+        let count = 5;
+        document.getElementById('countdown-text').innerText = count;
+        let countdownInterval = setInterval(() => {
+            count--;
+            if (count > 0) {
+                document.getElementById('countdown-text').innerText = count;
+            } else {
+                clearInterval(countdownInterval);
+                document.getElementById('countdown-screen').classList.add('hidden');
+                initGame();
+            }
+        }, 1000);
+    }
+
+    function initGame() {
+        bird = new MarioBird();
+        pipes = [new Pipe()];
+        score = 0;
+        gameState = "PLAYING";
+        
+        // Input Listener
+        window.removeEventListener('keydown', handleInput);
+        canvas.removeEventListener('touchstart', handleInput);
+        window.addEventListener('keydown', handleInput);
+        canvas.addEventListener('touchstart', handleInput);
+
+        if(gameLoopInterval) clearInterval(gameLoopInterval);
+        gameLoopInterval = setInterval(gameLoop, 1000 / 60);
+    }
+
+    function handleInput(e) {
+        if (e.code === "Space" || e.type === "touchstart") {
+            if(gameState === "PLAYING") bird.flap();
+        }
+    }
+
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Draw Background decorative "Mario Bricks" floor
+        ctx.fillStyle = "#d82800"; // Brick floor color
+        ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+        ctx.fillStyle = "#fc9838"; 
+        ctx.fillRect(0, canvas.height - 40, canvas.width, 4); // Floor Trim
+
+        bird.update();
+        bird.draw();
+
+        if (pipes[pipes.length - 1].x < canvas.width - 200) {
+            pipes.push(new Pipe());
+        }
+
+        for (let i = pipes.length - 1; i >= 0; i--) {
+            pipes[i].update();
+            pipes[i].draw();
+
+            // Collision check
+            if (
+                bird.x + bird.radius > pipes[i].x && 
+                bird.x - bird.radius < pipes[i].x + pipes[i].width
+            ) {
+                if (bird.y - bird.radius < pipes[i].topHeight || bird.y + bird.radius > pipes[i].topHeight + pipes[i].gap) {
+                    endGame();
+                }
+            }
+
+            // Points Tracking
+            if (!pipes[i].passed && pipes[i].x + pipes[i].width < bird.x) {
+                score++;
+                pipes[i].passed = true;
+            }
+
+            if (pipes[i].x + pipes[i].width < 0) pipes.splice(i, 1);
+        }
+
+        // Draw Live Score Board
+        ctx.fillStyle = "#FFF"; ctx.font = "bold 24px 'Courier New'";
+        ctx.fillText(`SCORE: ${score}`, 20, 40);
+    }
+
+    function endGame() {
+        clearInterval(gameLoopInterval);
+        gameState = "GAMEOVER";
+
+        // Log Data immediately
+        const logEntry = { ...currentSession, score: score, timestamp: new Date().toLocaleString() };
+        visitorLogs.push(logEntry);
+        localStorage.setItem('visitorLogs', JSON.stringify(visitorLogs));
+
+        // Update Highscores
+        highScores.push({ name: currentSession.name, work: currentSession.work, score: score });
+        localStorage.setItem('highScores', JSON.stringify(highScores));
+
+        // Show Game Over overlay
+        document.getElementById('final-score').innerText = `You scored ${score} points!`;
+        document.getElementById('gameover-screen').classList.remove('hidden');
+    }
+
+    function backToMenu() {
+        // Reset registration fields as requested
+        document.getElementById('p-name').value = "";
+        document.getElementById('p-phone').value = "";
+        document.getElementById('p-work').value = "";
+
+        document.getElementById('gameover-screen').classList.add('hidden');
+        document.getElementById('menu-screen').classList.remove('hidden');
+        updateLeaderboardUI();
+        
+        // Initial Background Clear
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "#d82800"; ctx.fillRect(0, canvas.height - 40, canvas.width, 40);
+    }
+
+    // --- DATA RETRIEVAL FOR BOOTH ADMIN ---
+    function exportData() {
+        if(visitorLogs.length === 0) {
+            alert("No visitor logs to export yet!"); return;
+        }
+        let csvContent = "data:text/csv;charset=utf-8,Timestamp,Name,Phone,Workplace,Score\n";
+        visitorLogs.forEach(row => {
+            csvContent += `"${row.timestamp}","${row.name}","${row.phone}","${row.work}",${row.score}\n`;
+        });
+        
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", `Booth_Visitors_Leads_${new Date().toISOString().slice(0,10)}.csv`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+
+    // Load initial screen
+    updateLeaderboardUI();
+</script>
+</body>
+</html>
